@@ -108,7 +108,10 @@
       }
     }
     if (record.latitude != null && record.longitude != null) {
-      out.push(`<a href="https://www.openstreetmap.org/?mlat=${record.latitude}&mlon=${record.longitude}#map=16/${record.latitude}/${record.longitude}" target="_blank" rel="noopener" class="${solid}"><span class="h-3.5 w-3.5">${ICONS.pin}</span>Mapa</a>`);
+      const lat = record.latitude, lon = record.longitude;
+      out.push(`<a href="https://www.google.com/maps/search/?api=1&query=${lat},${lon}" target="_blank" rel="noopener" class="${solid}"><span class="h-3.5 w-3.5">${ICONS.pin}</span>Google Maps</a>`);
+      out.push(`<a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lon}" target="_blank" rel="noopener" class="${ghost}"><span class="h-3.5 w-3.5">${ICONS.pin}</span>Street View</a>`);
+      out.push(`<a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}" target="_blank" rel="noopener" class="${ghost}"><span class="h-3.5 w-3.5">${ICONS.pin}</span>OSM</a>`);
     }
     if (record.source_url) {
       out.push(`<a href="${escapeHtml(record.source_url)}" target="_blank" rel="noopener" class="${ghost}"><span class="h-3.5 w-3.5">${ICONS.link}</span>Fuente</a>`);
