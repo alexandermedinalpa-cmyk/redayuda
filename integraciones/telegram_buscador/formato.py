@@ -54,6 +54,18 @@ def es_aparicion(rec: dict) -> bool:
     return any(k in st for k in (_FALLECIDA | _CON_NOVEDAD))
 
 
+def _ubicacion(rec: dict) -> str | None:
+    """Enlaces directos a la ubicación GPS (Google Maps + Street View), si hay coords."""
+    lat, lng = rec.get("latitude"), rec.get("longitude")
+    if lat is None or lng is None:
+        return None
+    return (
+        "🗺️ Google Maps: https://www.google.com/maps/search/?api=1&query=%s,%s\n"
+        "🧍 Street View: https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=%s,%s"
+        % (lat, lng, lat, lng)
+    )
+
+
 def formato_resultado(res: dict) -> str:
     """Formatea un resultado de búsqueda (/buscar)."""
     rec = res.get("record", res)
@@ -65,6 +77,9 @@ def formato_resultado(res: dict) -> str:
     lugar = _lugar(rec)
     if lugar:
         partes.append("📍 %s" % lugar)
+    ubic = _ubicacion(rec)
+    if ubic:
+        partes.append(ubic)
     if rec.get("age") is not None:
         partes.append("Edad aprox: %s" % rec["age"])
     if rec.get("status"):

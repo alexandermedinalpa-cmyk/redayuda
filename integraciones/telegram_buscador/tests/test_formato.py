@@ -56,3 +56,16 @@ def test_alerta_normal_pide_verificar():
     msg = formato.formato_alerta(rec)
     assert "Luis Pérez" in msg
     assert "verifica" in msg.lower()
+
+
+def test_resultado_incluye_enlaces_de_ubicacion():
+    rec = {"title": "Ana", "record_type": "persona_hospitalizada",
+           "latitude": 10.6, "longitude": -66.9}
+    msg = formato.formato_resultado({"record": rec})
+    assert "google.com/maps/search/?api=1&query=10.6,-66.9" in msg
+    assert "map_action=pano" in msg  # Street View
+
+
+def test_resultado_sin_coords_no_pone_enlaces():
+    msg = formato.formato_resultado({"record": {"title": "Ana", "record_type": "recurso"}})
+    assert "google.com/maps" not in msg
