@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -59,16 +60,21 @@ def enviar(token: str, chat_id, texto: str) -> None:
             "parse_mode": "Markdown",
             "disable_web_page_preview": "true",
         })
+    except urllib.error.HTTPError as e:
+        # Solo si el Markdown rompe el parseo (400) reintentamos en texto plano.
+        # En timeouts/errores de red NO reintentamos: el mensaje pudo haberse
+        # enviado igual y reenviar causaría duplicados.
+        if e.code == 400:
+            try:
+                _api(token, "sendMessage", {
+                    "chat_id": chat_id,
+                    "text": texto,
+                    "disable_web_page_preview": "true",
+                })
+            except Exception:
+                pass
     except Exception:
-        # Si el Markdown rompe el parseo (400), reintenta en texto plano.
-        try:
-            _api(token, "sendMessage", {
-                "chat_id": chat_id,
-                "text": texto,
-                "disable_web_page_preview": "true",
-            })
-        except Exception:
-            pass
+        pass  # timeout/red: no reintentar (evita duplicados)
 
 
 def _arg(texto: str, comando: str) -> str:
@@ -171,6 +177,14 @@ def main() -> None:  # pragma: no cover - bucle de red, se prueba por partes
         _servidor_salud(int(os.environ.get("PORT", "8080")))
     estado = alertas.cargar(ruta_estado)
     offset = 0
+    # Descartar el backlog al arrancar: responder solo a mensajes NUEVOS, no a los
+    # pendientes de antes (evita responder de nuevo tras cada reinicio/despliegue).
+    try:
+        prev = _api(token, "getUpdates", {"offset": -1, "timeout": 0}).get("result", [])
+        if prev:
+            offset = prev[-1]["update_id"] + 1
+    except Exception:
+        pass
     ultimo_feed = 0.0
     print("Bot en marcha. Índice: %s" % base)
     while True:
