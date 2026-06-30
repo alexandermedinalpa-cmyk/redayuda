@@ -20,7 +20,8 @@
   const messageEl = document.getElementById("mapMessage");
   const legendEl = document.getElementById("mapLegend");
 
-  let map, layer, state = { type: "", q: "" };
+  const cityInput = document.getElementById("mapCity");
+  let map, layer, state = { type: "", q: "", city: "" };
 
   // chips (reusa .rh-chip del sistema de diseño)
   chipsEl.innerHTML = TYPES.map((t) =>
@@ -63,9 +64,16 @@
   function popupHtml(r) {
     const m = typeMeta(r.record_type);
     const loc = [r.city, r.state].filter(Boolean).join(", ");
+    const geo = (r.latitude != null && r.longitude != null)
+      ? `<div style="margin-top:6px;display:flex;gap:12px;font-size:11px">
+           <a href="https://www.google.com/maps/search/?api=1&query=${r.latitude},${r.longitude}" target="_blank" rel="noopener" style="color:#121212">📍 Google Maps</a>
+           <a href="https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${r.latitude},${r.longitude}" target="_blank" rel="noopener" style="color:#121212">🧍 Street View</a>
+         </div>`
+      : "";
     return `<div style="min-width:180px">
       <div style="font-weight:600;margin-bottom:2px">${escapeHtml(r.title || r.person_name || "Registro")}</div>
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#4a4a4a">${escapeHtml(m.label)}${loc ? " · " + escapeHtml(loc) : ""}</div>
+      ${geo}
       <button type="button" data-detail="${escapeHtml(r.id)}" style="margin-top:6px;font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.05em;color:#121212;background:none;border:0;border-bottom:1px solid #121212;cursor:pointer;padding:0">Ver detalle →</button>
     </div>`;
   }
@@ -76,6 +84,7 @@
     const p = new URLSearchParams({ limit: "100", offset: "0" });
     if (state.q) p.set(state.q.match(/^\d{5,}$/) ? "cedula" : "q", state.q);
     if (state.type) p.set("record_type", state.type);
+    if (state.city) p.set("city", state.city);
     try {
       const data = await fetchJSON(`/api/records/search?${p}`);
       const withGeo = data.results.map((x) => x.record).filter((r) => r.latitude != null && r.longitude != null);
@@ -100,8 +109,12 @@
   }
 
   // eventos
-  form.addEventListener("submit", (e) => { e.preventDefault(); state.q = queryInput.value.trim(); load(); });
+  form.addEventListener("submit", (e) => { e.preventDefault(); state.q = queryInput.value.trim(); state.city = cityInput ? cityInput.value.trim() : ""; load(); });
   queryInput.addEventListener("search", () => { state.q = queryInput.value.trim(); load(); });
+  if (cityInput) {
+    cityInput.addEventListener("search", () => { state.city = cityInput.value.trim(); load(); });
+    cityInput.addEventListener("change", () => { state.city = cityInput.value.trim(); load(); });
+  }
   chipsEl.addEventListener("click", (e) => {
     const b = e.target.closest("[data-type]"); if (!b) return;
     state.type = b.dataset.type; setChips(); load();

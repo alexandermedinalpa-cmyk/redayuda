@@ -1,0 +1,37 @@
+# Configuración de despliegue en Fly.io para Red Rescate Venezuela.
+# Usa el Dockerfile del repo. El índice SQLite vive en un volumen persistente.
+#
+# Pasos (tras `fly auth login`):
+#   fly apps create red-rescate-venezuela        # o el nombre que elijas
+#   fly volumes create data --region mia --size 1 --yes
+#   fly secrets set ADMIN_API_KEY=<clave-larga-aleatoria>
+#   fly deploy
+#   fly deploy   # tras el primer arranque, dispara una sincronización (ver abajo)
+
+app = "red-rescate-venezuela"
+primary_region = "iad"   # Ashburn US-East: mejor latencia disponible hacia Venezuela
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0   # escala a cero cuando no hay tráfico (ahorro); el volumen conserva los datos
+
+[[mounts]]
+  source = "data"
+  destination = "/data"      # coincide con DATABASE_PATH=/data/index.db del Dockerfile
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[checks.health]
+  type = "http"
+  path = "/health"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
