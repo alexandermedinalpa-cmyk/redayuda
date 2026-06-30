@@ -1,0 +1,37 @@
+# Despliegue del webhook de WhatsApp en Fly.io.
+# Apunta la instancia de Evolution API (evento MESSAGES_UPSERT) a:
+#   https://red-rescate-wa.fly.dev/webhook/whatsapp
+#
+# Secrets necesarios:
+#   fly secrets set REDAYUDA_API=https://red-rescate-venezuela.fly.dev -a red-rescate-wa
+#   fly secrets set EVOLUTION_API_URL=<url-de-tu-evolution> -a red-rescate-wa
+#   fly secrets set EVOLUTION_API_KEY=<api-key> -a red-rescate-wa
+#   fly secrets set EVOLUTION_INSTANCE=red-rescate -a red-rescate-wa
+
+app = "red-rescate-wa"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.wa"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1   # siempre listo para recibir el webhook
+
+[[mounts]]
+  source = "wadata"
+  destination = "/data"      # suscripciones de alertas (alertas_wa.json)
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[checks.health]
+  type = "http"
+  path = "/health"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
