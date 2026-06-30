@@ -166,8 +166,9 @@ def main() -> None:  # pragma: no cover - bucle de red, se prueba por partes
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     base = os.environ.get("REDAYUDA_API", "http://127.0.0.1:8000")
     ruta_estado = os.environ.get("ALERTAS_DB", "alertas.json")
-    puerto = int(os.environ.get("PORT", "8080"))
-    _servidor_salud(puerto)
+    # Si va embebido en la web (misma máquina), no levanta su propio servidor de salud.
+    if not os.environ.get("BOT_EMBEDDED"):
+        _servidor_salud(int(os.environ.get("PORT", "8080")))
     estado = alertas.cargar(ruta_estado)
     offset = 0
     ultimo_feed = 0.0

@@ -13,9 +13,11 @@ RUN pip install --no-cache-dir \
     "httpx>=0.28,<1.0" \
     "python-dotenv>=1.0,<2.0"
 
-# Codigo de la app y frontend estatico.
+# Codigo de la app, frontend estatico, integraciones (bot embebido) y entrypoint.
 COPY app ./app
 COPY static ./static
+COPY integraciones ./integraciones
+COPY run_web.py ./run_web.py
 
 # El indice SQLite vive en un volumen persistente montado en /data.
 ENV DATABASE_PATH=/data/index.db
@@ -31,4 +33,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Arranca la web + el bot de Telegram (embebido) en la misma máquina.
+CMD ["python", "run_web.py"]
