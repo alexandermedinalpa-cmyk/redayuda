@@ -52,12 +52,23 @@ def _api(token: str, method: str, params: dict, timeout: int = 35) -> dict:
 
 
 def enviar(token: str, chat_id, texto: str) -> None:
-    _api(token, "sendMessage", {
-        "chat_id": chat_id,
-        "text": texto,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": "true",
-    })
+    try:
+        _api(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": texto,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": "true",
+        })
+    except Exception:
+        # Si el Markdown rompe el parseo (400), reintenta en texto plano.
+        try:
+            _api(token, "sendMessage", {
+                "chat_id": chat_id,
+                "text": texto,
+                "disable_web_page_preview": "true",
+            })
+        except Exception:
+            pass
 
 
 def _arg(texto: str, comando: str) -> str:
@@ -132,10 +143,31 @@ def revisar_alertas(token, base, estado, ruta_estado) -> dict:
     return estado
 
 
+def _servidor_salud(port: int) -> None:  # pragma: no cover - infra
+    """Mini servidor HTTP para que el host (Fly) mantenga el worker siempre vivo."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, *a):  # silencio
+            pass
+
+    srv = HTTPServer(("0.0.0.0", port), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+
 def main() -> None:  # pragma: no cover - bucle de red, se prueba por partes
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     base = os.environ.get("REDAYUDA_API", "http://127.0.0.1:8000")
     ruta_estado = os.environ.get("ALERTAS_DB", "alertas.json")
+    puerto = int(os.environ.get("PORT", "8080"))
+    _servidor_salud(puerto)
     estado = alertas.cargar(ruta_estado)
     offset = 0
     ultimo_feed = 0.0

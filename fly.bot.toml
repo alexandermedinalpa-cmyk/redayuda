@@ -1,0 +1,39 @@
+# Despliegue del bot de Telegram en Fly.io (worker, sin servicio HTTP).
+# Las suscripciones a alertas viven en un volumen persistente (/data/alertas.json).
+#
+# Pasos (tras `fly auth login`):
+#   fly apps create red-rescate-bot
+#   fly volumes create botdata --region iad --size 1 --yes -a red-rescate-bot
+#   fly secrets set REDAYUDA_API=https://red-rescate-venezuela.fly.dev -a red-rescate-bot
+#   fly secrets set TELEGRAM_BOT_TOKEN=<token-de-BotFather> -a red-rescate-bot
+#   fly deploy -c fly.bot.toml -a red-rescate-bot
+
+app = "red-rescate-bot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.bot"
+
+# Servicio HTTP de salud: hace que Fly mantenga el worker SIEMPRE encendido
+# (sin esto, Fly detiene la máquina por inactividad y el bot deja de responder).
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[checks.health]
+  type = "http"
+  path = "/"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+
+[[mounts]]
+  source = "botdata"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
