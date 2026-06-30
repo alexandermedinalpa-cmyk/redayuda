@@ -35,13 +35,16 @@ INTERVALO_FEED = 60  # segundos entre revisiones del feed para alertas
 
 AYUDA = (
     "🇻🇪 *Red Rescate Venezuela* — búsqueda de personas tras los terremotos.\n\n"
-    "Comandos:\n"
+    "🆘 *EMERGENCIA — persona con vida atrapada:*\n"
+    "• `/urgente [dónde] [cuántas personas] [contacto]` + comparte tu *ubicación* 📎\n"
+    "  → envía una alerta inmediata a los equipos de rescate.\n\n"
+    "🔎 *Buscar y avisos:*\n"
     "• `/buscar Nombre Apellido` — busca en todas las fuentes\n"
     "• `/alerta Nombre Apellido` — te aviso si aparece (viva, herida, en necesidad o fallecida)\n"
     "• `/misalertas` — tus alertas activas\n"
     "• `/quitar Nombre Apellido` — eliminar una alerta\n\n"
-    "_Esta herramienta es gratuita y sin fines de lucro. La información puede contener "
-    "errores; verifica siempre con el hospital o la fuente._"
+    "_Gratuita y sin fines de lucro. La información puede contener errores; verifica siempre "
+    "con el hospital, la fuente o emergencias._"
 )
 
 
@@ -130,8 +133,48 @@ def manejar_update(token, base, estado, ruta_estado, update) -> None:
         alertas.quitar(estado, chat_id, q)
         alertas.guardar(ruta_estado, estado)
         enviar(token, chat_id, "Quité la alerta de “%s”." % q)
+    elif texto.startswith("/urgente") or (msg.get("location") and not texto):
+        _reportar_urgencia(token, chat_id, msg)
     else:
         enviar(token, chat_id, AYUDA)
+
+
+def _reportar_urgencia(token, chat_id, msg) -> None:
+    """🆘 Reporte de persona con vida atrapada -> alerta inmediata al canal de rescate."""
+    canal = os.environ.get("RESCATE_CANAL", "")
+    desc = _arg(msg.get("text") or "", "/urgente")
+    loc = msg.get("location")
+    if not canal:
+        enviar(token, chat_id, "El canal de rescate aún no está configurado. Avisa al equipo.")
+        return
+    if not desc and not loc:
+        enviar(token, chat_id,
+               "🆘 *Reportar persona con vida atrapada*\n\n"
+               "Escribe: `/urgente [dónde está] [cuántas personas] [contacto]`\n"
+               "y, si puedes, comparte tu *ubicación* 📎 (clip → Ubicación) para el punto exacto.")
+        return
+    partes = ["🆘 *URGENTE — Posible persona con vida atrapada*"]
+    if desc:
+        partes.append(desc)
+    if loc:
+        la, lo = loc.get("latitude"), loc.get("longitude")
+        partes.append("📍 Ubicación: https://www.google.com/maps/search/?api=1&query=%s,%s" % (la, lo))
+    quien = (msg.get("from") or {}).get("first_name") or "anónimo"
+    partes.append("Reportado por *%s* vía @red_ayuda_bot. ⚠️ Verifiquen y actúen de inmediato." % quien)
+    mensaje = "\n\n".join(partes)
+    # Publicar en el canal (detectando si falla, p. ej. usuario de canal incorrecto).
+    try:
+        _api(token, "sendMessage", {
+            "chat_id": canal, "text": mensaje,
+            "parse_mode": "Markdown", "disable_web_page_preview": "true",
+        })
+        enviar(token, chat_id,
+               "✅ Tu reporte urgente fue enviado a los equipos de rescate. Gracias.\n"
+               "Si aún no lo hiciste, comparte tu *ubicación* 📎 para localizar el punto exacto.")
+    except Exception:
+        enviar(token, chat_id,
+               "⚠️ No pude enviar el reporte al canal de rescate ahora. "
+               "Por favor llama también a emergencias.")
 
 
 def revisar_alertas(token, base, estado, ruta_estado) -> dict:
