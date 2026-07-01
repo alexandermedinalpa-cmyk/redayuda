@@ -79,6 +79,23 @@
         </div>
       </section>
 
+      <!-- ===== Ayuda e insumos (a la vista) ===== -->
+      <section aria-label="Ayuda e insumos" class="mt-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span class="text-sm font-semibold text-slate-700">🤝 Ayuda e insumos</span>
+            <span class="text-xs text-slate-400">¿dónde donar, pedir o llevar insumos? centros y recursos activos</span>
+          </div>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button type="button" onclick="document.querySelector('#typeChips [data-type=centro_acopio]').click()" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">📦 Centros de acopio</button>
+            <button type="button" onclick="document.querySelector('#typeChips [data-type=centro_donacion]').click()" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">🎁 Donaciones</button>
+            <button type="button" onclick="document.querySelector('#typeChips [data-type=recurso]').click()" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">🧰 Recursos e insumos</button>
+            <a href="/mapa" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">🗺️ Verlos en el mapa</a>
+          </div>
+          <p class="mt-2 text-xs text-slate-400">¿Estás en terreno y necesitas algo (palas, guantes, maquinaria, agua…)? Pídelo por el bot de Telegram con <span class="font-mono">/necesito</span>.</p>
+        </div>
+      </section>
+
       <div id="messageArea" class="mt-4" aria-live="polite"></div>
 
       <!-- ===== Estado inicial: pulso + recientes ===== -->
