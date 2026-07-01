@@ -2,6 +2,10 @@
 
 API en FastAPI con frontend web para indexar informacion humanitaria de multiples fuentes abiertas. El objetivo es que apps de personas desaparecidas, centros de acopio, donaciones y otras fuentes puedan consultar una red comun y tambien aportar datos normalizados.
 
+> ### 🔗 Demo en vivo: **https://red-rescate-venezuela.fly.dev**
+> Web pública con 120k+ registros · Bot de Telegram **@red_ayuda_bot** (búsqueda, alertas, `/urgente`) · Mapa.
+> Para colaboradores: úsalo para probar tu aporte en funcionamiento. *(Plan gratuito: el primer acceso tras inactividad puede tardar unos segundos en despertar.)*
+
 ## Requisitos
 
 - Python 3.10+ (FastAPI 0.138.1 lo exige).
