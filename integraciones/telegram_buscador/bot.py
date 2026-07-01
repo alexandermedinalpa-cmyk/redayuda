@@ -38,9 +38,11 @@ INTERVALO_FEED = 60  # segundos entre revisiones del feed para alertas
 AYUDA = (
     "🇻🇪 *Red Rescate Venezuela* — búsqueda de personas tras los terremotos.\n\n"
     "🆘 *EMERGENCIA — persona con vida atrapada:*\n"
-    "• `/urgente [dirección] · [cuántas personas] · [teléfono]`\n"
-    "  luego 📎 comparte tu *ubicación GPS* y 📷 envía *fotos del lugar*.\n"
-    "  → alerta inmediata a los rescatistas (con fecha y hora).\n\n"
+    "• `/urgente [dirección] · [personas] · [teléfono]` + 📎 ubicación + 📷 fotos\n"
+    "  → alerta inmediata a los rescatistas.\n\n"
+    "📦 *PEDIR AYUDA / INSUMOS (desde el terreno):*\n"
+    "• `/necesito [qué: palas, guantes, maquinaria, agua…] · [dónde] · [nombre y teléfono]`\n"
+    "  luego 📎 ubicación GPS y 📷 fotos → va al canal de logística/donantes.\n\n"
     "🔎 *Buscar y avisos:*\n"
     "• `/buscar Nombre Apellido` — busca en todas las fuentes\n"
     "• `/alerta Nombre Apellido` — te aviso si aparece (viva, herida, en necesidad o fallecida)\n"
@@ -104,9 +106,9 @@ def enviar_foto(token: str, chat_id, file_id: str, caption: str = "") -> bool:
         return False
 
 
-# --- Utilidades para el reporte de urgencia (anti-abuso / anti-inyección) ---
+# --- Utilidades para reportes de terreno (urgencia/necesidad): anti-abuso/inyección ---
 _URGENTE_HIST: dict = {}
-_URGENTE_SESION: dict = {}  # chat_id -> timestamp: ventana para adjuntar foto/ubicación tras /urgente
+_REPORTE_SESION: dict = {}  # chat_id -> {ts, canal, etiqueta}: ventana para adjuntar foto/ubicación
 _MD_CHARS = re.compile(r"[*_`\[\]()~>#+=|{}]")
 
 
@@ -155,14 +157,19 @@ def manejar_update(token, base, estado, ruta_estado, update) -> None:
     texto = (msg.get("text") or "").strip()
     caption = (msg.get("caption") or "").strip()
 
-    # /urgente puede venir como texto, o como pie de foto (foto + descripción juntas).
+    # Reportes de terreno: como texto o como pie de foto (foto + descripción juntas).
     if texto.startswith("/urgente") or caption.startswith("/urgente"):
         _reportar_urgencia(token, chat_id, msg)
         return
-    # Foto o ubicación tras un /urgente reciente: se adjuntan a ese reporte.
-    if (msg.get("photo") or msg.get("location")) and _sesion_urgente_activa(chat_id):
-        _adjuntar_urgencia(token, chat_id, msg)
+    if texto.startswith("/necesito") or caption.startswith("/necesito"):
+        _reportar_necesidad(token, chat_id, msg)
         return
+    # Foto o ubicación tras un reporte reciente: se adjuntan a ese reporte (su canal).
+    if msg.get("photo") or msg.get("location"):
+        sesion = _sesion_reporte_activa(chat_id)
+        if sesion:
+            _adjuntar_reporte(token, chat_id, msg, sesion)
+            return
 
     if texto.startswith(("/start", "/ayuda", "/help")):
         enviar(token, chat_id, AYUDA)
@@ -210,56 +217,46 @@ def manejar_update(token, base, estado, ruta_estado, update) -> None:
         enviar(token, chat_id, AYUDA)
 
 
-def _sesion_urgente_activa(chat_id, ventana: float = 900) -> bool:
-    """True si el usuario hizo /urgente en los últimos ~15 min (para adjuntar foto/ubicación)."""
-    ts = _URGENTE_SESION.get(chat_id)
-    return ts is not None and (time.time() - ts) < ventana
+def _sesion_reporte_activa(chat_id, ventana: float = 900):
+    """Devuelve la sesión de reporte (canal/etiqueta) si el usuario hizo /urgente o
+    /necesito en los últimos ~15 min (para adjuntar foto/ubicación), o None."""
+    s = _REPORTE_SESION.get(chat_id)
+    if s and (time.time() - s["ts"]) < ventana:
+        return s
+    return None
 
 
-def _reportar_urgencia(token, chat_id, msg) -> None:
-    """🆘 Reporte de persona con vida atrapada -> alerta inmediata al canal de rescate.
-
-    Captura lo que piden los rescatistas: ubicación (GPS o escrita), foto del lugar,
-    contacto, y fecha/hora (automática). Foto/ubicación extra se adjuntan después
-    (ventana de sesión). Texto sanitizado + plano (anti-inyección).
-    """
-    canal = os.environ.get("RESCATE_CANAL", "")
+def _publicar_reporte(token, chat_id, msg, *, comando, canal, encabezado,
+                      instrucciones, etiqueta) -> None:
+    """Publica un reporte de terreno (urgencia o necesidad) en su canal, BIEN PUESTO:
+    descripción sanitizada, foto, GPS y contacto, con fecha/hora automática. Deja una
+    ventana para adjuntar foto/ubicación después. Texto plano (anti-inyección)."""
     fuente_texto = (msg.get("text") or "") or (msg.get("caption") or "")
-    desc = _sanit(_arg(fuente_texto, "/urgente"), 500)
+    desc = _sanit(_arg(fuente_texto, comando), 600)
     loc = msg.get("location") or {}
     la = _coord_valida(loc.get("latitude"), 90)
     lo = _coord_valida(loc.get("longitude"), 180)
     foto = _foto_id(msg)
 
     if not canal:
-        enviar(token, chat_id, "El canal de rescate aún no está configurado. Avisa al equipo.")
+        enviar(token, chat_id, "Ese canal aún no está configurado. Avisa al equipo.")
         return
     if not desc and la is None and not foto:
-        enviar(token, chat_id,
-               "🆘 *Reportar persona con vida atrapada*\n\n"
-               "Envía en un mensaje:\n"
-               "`/urgente [dirección exacta] · [cuántas personas] · [teléfono de contacto]`\n\n"
-               "Y luego, para el rescate:\n"
-               "• 📎 comparte la *ubicación GPS* (clip → Ubicación)\n"
-               "• 📷 envía *fotos del lugar*\n"
-               "_(La fecha y hora se añaden solas.)_")
+        enviar(token, chat_id, instrucciones)
         return
     if not _rate_urgente_ok(chat_id, time.time()):
         enviar(token, chat_id,
-               "Ya enviaste varios reportes; los equipos de rescate los están viendo. "
-               "Si es una emergencia distinta, espera unos minutos.")
+               "Ya enviaste varios reportes; los equipos los están viendo. "
+               "Si es algo distinto, espera unos minutos.")
         return
 
     quien = _sanit((msg.get("from") or {}).get("first_name"), 40) or "anónimo"
-    partes = [
-        "🆘 URGENTE — Posible persona con vida atrapada",
-        "🕐 %s (hora Venezuela)" % _ahora_ve(),
-    ]
+    partes = [encabezado, "🕐 %s (hora Venezuela)" % _ahora_ve()]
     if desc:
         partes.append(desc)
     if la is not None and lo is not None:
         partes.append("📍 GPS: https://www.google.com/maps/search/?api=1&query=%.6f,%.6f" % (la, lo))
-    partes.append("Reportado por %s vía @red_ayuda_bot. Verifiquen y actúen de inmediato." % quien)
+    partes.append("Reportado por %s vía @red_ayuda_bot." % quien)
     mensaje = "\n\n".join(partes)
 
     try:
@@ -268,28 +265,48 @@ def _reportar_urgencia(token, chat_id, msg) -> None:
         else:
             _api(token, "sendMessage", {
                 "chat_id": canal, "text": mensaje, "disable_web_page_preview": "true"})
-        _URGENTE_SESION[chat_id] = time.time()  # abre ventana para adjuntar foto/ubicación
+        _REPORTE_SESION[chat_id] = {"ts": time.time(), "canal": canal, "etiqueta": etiqueta}
         enviar(token, chat_id,
-               "✅ Tu reporte urgente fue enviado a los equipos de rescate.\n"
-               "Para ayudarlos, ahora puedes 📎 compartir tu *ubicación GPS* y 📷 enviar *fotos del lugar*.")
+               "✅ Enviado (%s). Ahora puedes 📎 compartir tu *ubicación GPS* y 📷 enviar "
+               "*fotos* para completarlo." % etiqueta)
     except urllib.error.HTTPError as e:
-        print("[urgente] fallo publicar en canal '%s': HTTP %s %s"
+        print("[reporte] fallo publicar en '%s': HTTP %s %s"
               % (canal, e.code, _leer_cuerpo(e)[:150]), flush=True)
-        enviar(token, chat_id,
-               "⚠️ No pude enviar el reporte al canal de rescate ahora. "
-               "Por favor llama también a emergencias.")
+        enviar(token, chat_id, "⚠️ No pude enviarlo ahora. Intenta de nuevo o usa otro medio.")
     except Exception as e:
-        print("[urgente] fallo publicar en canal '%s': %r" % (canal, e), flush=True)
-        enviar(token, chat_id,
-               "⚠️ No pude enviar el reporte al canal de rescate ahora. "
-               "Por favor llama también a emergencias.")
+        print("[reporte] fallo publicar en '%s': %r" % (canal, e), flush=True)
+        enviar(token, chat_id, "⚠️ No pude enviarlo ahora. Intenta de nuevo o usa otro medio.")
 
 
-def _adjuntar_urgencia(token, chat_id, msg) -> None:
-    """Adjunta una foto o ubicación al reporte /urgente reciente (la relaya al canal)."""
-    canal = os.environ.get("RESCATE_CANAL", "")
-    if not canal:
-        return
+def _reportar_urgencia(token, chat_id, msg) -> None:
+    """🆘 Persona con vida atrapada -> canal de rescate."""
+    _publicar_reporte(
+        token, chat_id, msg, comando="/urgente",
+        canal=os.environ.get("RESCATE_CANAL", ""),
+        encabezado="🆘 URGENTE — Posible persona con vida atrapada",
+        instrucciones=("🆘 *Reportar persona con vida atrapada*\n\n"
+                       "Envía: `/urgente [dirección exacta] · [cuántas personas] · [teléfono]`\n\n"
+                       "Y luego 📎 comparte *ubicación GPS* y 📷 envía *fotos del lugar*."),
+        etiqueta="reporte urgente")
+
+
+def _reportar_necesidad(token, chat_id, msg) -> None:
+    """📦 Solicitud de insumos/ayuda desde el terreno -> canal de necesidades."""
+    _publicar_reporte(
+        token, chat_id, msg, comando="/necesito",
+        canal=os.environ.get("NECESIDADES_CANAL", ""),
+        encabezado="📦 SOLICITUD DE AYUDA / INSUMOS",
+        instrucciones=("📦 *Pedir ayuda o insumos desde el terreno*\n\n"
+                       "Envía: `/necesito [qué necesitas: palas, guantes, maquinaria, agua…] · "
+                       "[dónde] · [nombre y teléfono]`\n\n"
+                       "Y luego 📎 comparte *ubicación GPS* y 📷 envía *fotos*."),
+        etiqueta="solicitud de insumos")
+
+
+def _adjuntar_reporte(token, chat_id, msg, sesion) -> None:
+    """Adjunta foto/ubicación al reporte reciente (urgencia o necesidad), a su canal."""
+    canal = sesion["canal"]
+    etiqueta = sesion["etiqueta"]
     quien = _sanit((msg.get("from") or {}).get("first_name"), 40) or "anónimo"
     foto = _foto_id(msg)
     loc = msg.get("location") or {}
@@ -298,20 +315,21 @@ def _adjuntar_urgencia(token, chat_id, msg) -> None:
     ok = False
     if foto:
         ok = enviar_foto(token, canal, foto,
-                         "📷 Foto del reporte urgente de %s — %s (hora VE)" % (quien, _ahora_ve()))
+                         "📷 Foto de la %s de %s — %s (hora VE)" % (etiqueta, quien, _ahora_ve()))
     elif la is not None and lo is not None:
-        txt = ("📍 GPS del reporte urgente de %s — %s (hora VE)\n"
-               "https://www.google.com/maps/search/?api=1&query=%.6f,%.6f" % (quien, _ahora_ve(), la, lo))
+        txt = ("📍 GPS de la %s de %s — %s (hora VE)\n"
+               "https://www.google.com/maps/search/?api=1&query=%.6f,%.6f"
+               % (etiqueta, quien, _ahora_ve(), la, lo))
         try:
             _api(token, "sendMessage", {"chat_id": canal, "text": txt, "disable_web_page_preview": "true"})
             ok = True
         except Exception as e:
-            print("[urgente] fallo adjuntar ubicación: %r" % e, flush=True)
+            print("[reporte] fallo adjuntar ubicación: %r" % e, flush=True)
     if ok:
-        _URGENTE_SESION[chat_id] = time.time()  # refresca la ventana
-        enviar(token, chat_id, "✅ Añadido a tu reporte de rescate. Gracias.")
+        _REPORTE_SESION[chat_id]["ts"] = time.time()  # refresca la ventana
+        enviar(token, chat_id, "✅ Añadido a tu %s. Gracias." % etiqueta)
     else:
-        enviar(token, chat_id, "⚠️ No pude adjuntarlo al canal ahora. Intenta de nuevo.")
+        enviar(token, chat_id, "⚠️ No pude adjuntarlo ahora. Intenta de nuevo.")
 
 
 def revisar_alertas(token, base, estado, ruta_estado) -> dict:
