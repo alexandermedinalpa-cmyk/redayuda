@@ -124,19 +124,33 @@
       ? `<a href="/entidad?id=${encodeURIComponent(r.entity_id)}" class="rh-action mt-3 inline-flex items-center gap-1.5 bg-ink-900 px-3 py-2 text-sm text-white hover:bg-ink-600">Ver en todas las fuentes →</a>`
       : "";
 
+    // Protección de datos de las familias: enmascarar cédula/teléfono y, si es
+    // menor, ocultar foto y contacto (mismo criterio ético que el bot).
+    const esMenor = (r.age != null && Number(r.age) < 18) || (r.tags || []).includes("menor");
+    const soloDig = (s) => String(s || "").replace(/\D/g, "");
+    const maskTel = (s) => { const d = soloDig(s); return d.length >= 4 ? "•••• ••" + d.slice(-2) : (s ? "(protegido)" : ""); };
+    const maskCed = (s) => { const d = soloDig(s); return d.length >= 4 ? "•••" + d.slice(-4) : (s ? "(protegida)" : ""); };
+    const contactoVis = (r.contact && !esMenor) ? maskTel(r.contact) : "";
+    const cedulaVis = r.cedula ? maskCed(r.cedula) : "";
+    const mostrarFoto = r.image_url && !esMenor;
+    const avisoMenor = esMenor
+      ? `<div class="mb-4 border-l-4 border-ink-900 bg-slate-50 px-3 py-2 text-xs text-slate-700">Menor de edad: por protección se ocultan foto y contacto. Coordina con la fuente o la autoridad.</div>`
+      : "";
+
     drawerType.innerHTML = typeChip(r.record_type);
     drawerTitle.textContent = r.title || r.person_name || "Detalle";
     drawerBody.innerHTML = `
-      ${r.image_url ? `<img src="${escapeHtml(r.image_url)}" alt="Foto de ${escapeHtml(r.person_name || r.title || typeLabel(r.record_type))}" referrerpolicy="no-referrer" class="mb-4 max-h-56 w-full object-cover ring-1 ring-slate-200" onerror="this.remove()">` : ""}
+      ${avisoMenor}
+      ${mostrarFoto ? `<img src="${escapeHtml(r.image_url)}" alt="Foto de ${escapeHtml(r.person_name || r.title || typeLabel(r.record_type))}" referrerpolicy="no-referrer" class="mb-4 max-h-56 w-full object-cover ring-1 ring-slate-200" onerror="this.remove()">` : ""}
       ${actionLinks(r) ? `<div class="mb-4 flex flex-wrap gap-2">${actionLinks(r)}</div>` : ""}
       ${r.summary ? `<p class="mb-4 text-sm text-slate-600">${escapeHtml(r.summary)}</p>` : ""}
       <dl>
         ${detailRow("Persona", r.person_name)}
-        ${detailRow("Cédula", r.cedula)}
+        ${detailRow("Cédula", cedulaVis)}
         ${detailRow("Edad", r.age)}
         ${detailRow("Organización", r.organization)}
         ${detailRow("Ubicación", loc)}
-        ${detailRow("Contacto", r.contact)}
+        ${detailRow("Contacto", contactoVis)}
         ${detailRow("Estado", r.status)}
         ${detailRow("Etiquetas", tags, true)}
         ${detailRow("Fuente", src, true)}

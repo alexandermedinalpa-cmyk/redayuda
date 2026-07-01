@@ -99,14 +99,9 @@
     const solid = "rh-action inline-flex items-center gap-1.5 bg-ink-900 px-3 py-1.5 text-xs text-white hover:bg-ink-600";
     const ghost = "rh-action inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-ink-900 ring-1 ring-inset ring-ink-900 hover:bg-ink-50";
     const out = [];
-    if (record.contact) {
-      const tel = String(record.contact).replace(/[^\d+]/g, "");
-      if (tel.length >= 7) {
-        out.push(`<a href="tel:${escapeHtml(tel)}" class="${solid}"><span class="h-3.5 w-3.5">${ICONS.phone}</span>Llamar</a>`);
-      } else {
-        out.push(`<span class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-ink-600 ring-1 ring-inset ring-ink-200">${escapeHtml(record.contact)}</span>`);
-      }
-    }
+    // Privacidad: no exponemos un botón "Llamar" con el teléfono completo de la
+    // familia (riesgo de acoso/estafas). El contacto va enmascarado en la ficha;
+    // para contactar de verdad, se usa la fuente original.
     if (record.latitude != null && record.longitude != null) {
       const lat = record.latitude, lon = record.longitude;
       out.push(`<a href="https://www.google.com/maps/search/?api=1&query=${lat},${lon}" target="_blank" rel="noopener" class="${solid}"><span class="h-3.5 w-3.5">${ICONS.pin}</span>Google Maps</a>`);
