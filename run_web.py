@@ -58,11 +58,15 @@ if _TOKEN:
             _estado["ultimo_feed"] = time.time()
         return {"ok": True}
 
-    @app.on_event("startup")
-    async def _configurar_webhook():
+    import threading
+
+    def _configurar_webhook():
+        # A nivel de módulo (no on_event): redayuda usa lifespan y FastAPI ignora
+        # los handlers on_event("startup"). setWebhook solo registra la URL en
+        # Telegram; no necesita que el servidor local ya esté sirviendo.
         url = _PUBLICA.rstrip("/") + "/tg/webhook"
         try:
-            await asyncio.to_thread(tg._api, _TOKEN, "setWebhook", {
+            tg._api(_TOKEN, "setWebhook", {
                 "url": url,
                 "secret_token": _SECRET,
                 "drop_pending_updates": "true",  # limpia backlog al cambiar a webhook
@@ -71,5 +75,7 @@ if _TOKEN:
             print("[tg] webhook configurado en", url)
         except Exception as exc:  # noqa: BLE001
             print("[tg] setWebhook falló:", repr(exc))
+
+    threading.Thread(target=_configurar_webhook, daemon=True).start()
 else:
     print("[run_web] sin TELEGRAM_BOT_TOKEN: solo web (bot desactivado).")
