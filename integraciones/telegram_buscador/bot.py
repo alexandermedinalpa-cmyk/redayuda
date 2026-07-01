@@ -171,7 +171,17 @@ def _reportar_urgencia(token, chat_id, msg) -> None:
         enviar(token, chat_id,
                "✅ Tu reporte urgente fue enviado a los equipos de rescate. Gracias.\n"
                "Si aún no lo hiciste, comparte tu *ubicación* 📎 para localizar el punto exacto.")
-    except Exception:
+    except urllib.error.HTTPError as e:
+        try:
+            detalle = e.read().decode("utf-8", "replace")
+        except Exception:
+            detalle = str(e)
+        print("[urgente] fallo publicar en canal '%s': HTTP %s %s" % (canal, e.code, detalle))
+        enviar(token, chat_id,
+               "⚠️ No pude enviar el reporte al canal de rescate ahora. "
+               "Por favor llama también a emergencias.")
+    except Exception as e:
+        print("[urgente] fallo publicar en canal '%s': %r" % (canal, e))
         enviar(token, chat_id,
                "⚠️ No pude enviar el reporte al canal de rescate ahora. "
                "Por favor llama también a emergencias.")
