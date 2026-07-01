@@ -1009,6 +1009,16 @@ def rank_indexed_record(record, query="", cedula=None):
             if matched:
                 score = _add_score(score, reasons, weight * len(matched), field)
 
+    # Bonus si TODAS las palabras de la consulta (>=2) estan en el nombre o el
+    # titulo: prioriza coincidencias de NOMBRE COMPLETO sobre las parciales, para
+    # que quien busca un nombre entero vea arriba a las personas mas parecidas.
+    if len(tokens) >= 2:
+        for field in ("persona", "titulo"):
+            field_tokens = set(tokenize(fields[field]))
+            if field_tokens and all(token in field_tokens for token in tokens):
+                score = _add_score(score, reasons, 400, "%s_completo" % field)
+                break
+
     if record.age is not None and str(record.age) in tokens:
         score = _add_score(score, reasons, 60, "edad")
 

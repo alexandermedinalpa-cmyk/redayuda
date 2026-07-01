@@ -196,7 +196,7 @@
 
   function renderResults(data, append) {
     clearMessage();
-    resultCount.textContent = `${compactNumber(data.total_matches)} coincidencias en ${compactNumber(data.source_count)} fuentes`;
+    resultCount.textContent = `Ordenados por relevancia (lo más parecido arriba) · ${compactNumber(data.total_matches)} coincidencias en ${compactNumber(data.source_count)} fuentes`;
     resultTime.textContent = `${compactNumber(data.elapsed_ms)} ms`;
     const html = data.results.map(recordCard).join("");
     if (append) resultsList.insertAdjacentHTML("beforeend", html);
