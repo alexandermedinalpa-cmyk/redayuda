@@ -1,38 +1,75 @@
-"""Punto de entrada combinado: corre la web (uvicorn) Y el bot de Telegram en un
-hilo, en la MISMA máquina. Así no hace falta una máquina extra para el bot
-(opción gratuita dentro del plan trial de Fly).
+"""Punto de entrada: corre la web de redayuda Y el bot de Telegram por WEBHOOK,
+en la misma máquina y sin depender de que esté siempre encendida.
 
-El bot solo arranca si existe TELEGRAM_BOT_TOKEN. Si no, corre solo la web.
+Por qué webhook y no polling: en el plan gratuito la máquina se duerme por
+inactividad. Con webhook, CADA mensaje de Telegram llega como un POST que
+despierta la máquina y se procesa al instante (nada se pierde). El polling, en
+cambio, solo recibe mientras la máquina está despierta.
+
+Expone `app` (la app de redayuda + la ruta del webhook) para uvicorn.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import os
-import threading
+import time
 
+from app.main import app  # la app FastAPI de redayuda (no se modifica su código)
 
-def _run_bot() -> None:
-    if not os.environ.get("TELEGRAM_BOT_TOKEN"):
-        print("[run_web] sin TELEGRAM_BOT_TOKEN: el bot no arranca (solo web).")
-        return
-    # El bot consulta la web local y guarda alertas en el volumen.
-    os.environ.setdefault("REDAYUDA_API", "http://127.0.0.1:8000")
-    os.environ.setdefault("ALERTAS_DB", "/data/alertas.json")
-    os.environ["BOT_EMBEDDED"] = "1"  # no levantar servidor de salud propio
-    try:
-        from integraciones.telegram_buscador.bot import main as bot_main
-        print("[run_web] arrancando bot de Telegram (embebido)...")
-        bot_main()
-    except Exception as exc:  # noqa: BLE001 - el bot no debe tumbar la web
-        print("[run_web] el bot terminó:", repr(exc))
+_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
+if _TOKEN:
+    from fastapi import Request
 
-def main() -> None:
-    # El bot en un hilo demonio; la web en el hilo principal.
-    threading.Thread(target=_run_bot, daemon=True).start()
-    import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
+    from integraciones.telegram_buscador import alertas
+    from integraciones.telegram_buscador import bot as tg
 
+    _BASE = "http://127.0.0.1:8000"  # la web local, misma máquina
+    _RUTA = os.environ.get("ALERTAS_DB", "/data/alertas.json")
+    _PUBLICA = os.environ.get("PUBLIC_URL", "https://red-rescate-venezuela.fly.dev")
+    _SECRET = hashlib.sha256(_TOKEN.encode()).hexdigest()[:40]  # valida que el POST venga de Telegram
 
-if __name__ == "__main__":
-    main()
+    _estado = {"e": alertas.cargar(_RUTA), "ultimo_feed": 0.0}
+
+    @app.post("/tg/webhook", include_in_schema=False)
+    async def _tg_webhook(request: Request):
+        # Solo Telegram conoce este secreto (lo fijamos en setWebhook).
+        if request.headers.get("x-telegram-bot-api-secret-token") != _SECRET:
+            return {"ok": False}
+        try:
+            update = await request.json()
+        except Exception:
+            return {"ok": True}
+        # manejar_update hace llamadas HTTP bloqueantes -> a un hilo para no frenar el loop.
+        try:
+            await asyncio.to_thread(tg.manejar_update, _TOKEN, _BASE, _estado["e"], _RUTA, update)
+        except Exception as exc:  # noqa: BLE001
+            print("[tg] error manejando update:", repr(exc))
+        # Alertas oportunistas: cada vez que la máquina está despierta, revisa el feed (máx 1/min).
+        if time.time() - _estado["ultimo_feed"] > 60:
+            try:
+                _estado["e"] = await asyncio.to_thread(
+                    tg.revisar_alertas, _TOKEN, _BASE, _estado["e"], _RUTA
+                )
+            except Exception as exc:  # noqa: BLE001
+                print("[tg] error revisando alertas:", repr(exc))
+            _estado["ultimo_feed"] = time.time()
+        return {"ok": True}
+
+    @app.on_event("startup")
+    async def _configurar_webhook():
+        url = _PUBLICA.rstrip("/") + "/tg/webhook"
+        try:
+            await asyncio.to_thread(tg._api, _TOKEN, "setWebhook", {
+                "url": url,
+                "secret_token": _SECRET,
+                "drop_pending_updates": "true",  # limpia backlog al cambiar a webhook
+                "allowed_updates": '["message","edited_message"]',
+            })
+            print("[tg] webhook configurado en", url)
+        except Exception as exc:  # noqa: BLE001
+            print("[tg] setWebhook falló:", repr(exc))
+else:
+    print("[run_web] sin TELEGRAM_BOT_TOKEN: solo web (bot desactivado).")
