@@ -66,10 +66,15 @@ def responder(texto: str, numero: str, estado: dict, base: str, *, fetch=None) -
 
 
 def crear_app():  # pragma: no cover - integración FastAPI
+    import hmac
+
     from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
 
     base = os.environ.get("REDAYUDA_API", "http://127.0.0.1:8000")
     ruta = os.environ.get("ALERTAS_DB", "/data/alertas_wa.json")
+    # Secreto para autenticar que el webhook viene de Evolution (header Authorization).
+    webhook_secret = os.environ.get("EVOLUTION_WEBHOOK_SECRET", "")
     evo = Evolution()
     app = FastAPI(title="Red Rescate Venezuela — WhatsApp")
 
@@ -79,9 +84,15 @@ def crear_app():  # pragma: no cover - integración FastAPI
 
     @app.post("/webhook/whatsapp")
     async def webhook(request: Request):
+        # Si hay secreto configurado, exige que Evolution lo envíe (anti-spoofing).
+        if webhook_secret:
+            recibido = request.headers.get("authorization", "")
+            if not hmac.compare_digest(recibido, webhook_secret):
+                return JSONResponse(status_code=401, content={"ok": False})
         try:
             payload = await request.json()
-        except Exception:
+        except Exception as exc:
+            print("[wa] webhook con cuerpo ilegible:", repr(exc), flush=True)
             return {"ok": True, "skipped": "bad json"}
         ent = parse_incoming(payload)
         if ent is None:
@@ -91,8 +102,10 @@ def crear_app():  # pragma: no cover - integración FastAPI
         alertas.guardar(ruta, estado)
         try:
             evo.enviar_texto(ent.numero, reply)
-        except Exception:
-            pass  # no romper el webhook si el envío falla
+        except Exception as exc:
+            # Loggea y devuelve 502 para que Evolution reintente la entrega.
+            print("[wa] envío falló a %s (%r): %r" % (ent.numero, reply[:60], exc), flush=True)
+            return JSONResponse(status_code=502, content={"ok": False, "error": "send_failed"})
         return {"ok": True}
 
     return app
@@ -102,5 +115,6 @@ def crear_app():  # pragma: no cover - integración FastAPI
 # que solo prueban `responder`).
 try:  # pragma: no cover
     app = crear_app()
-except Exception:  # pragma: no cover
+except Exception as _exc:  # pragma: no cover
+    print("[wa] no se pudo crear la app:", repr(_exc), flush=True)
     app = None

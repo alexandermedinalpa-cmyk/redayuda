@@ -19,6 +19,10 @@ from .formato import es_aparicion
 from .normaliza import solo_digitos, tokens
 
 
+# Tope de suscripciones por usuario (evita que uno solo infle el estado / DoS).
+MAX_ALERTAS_POR_USUARIO = 20
+
+
 def estado_inicial() -> dict:
     return {"cursor": 0, "suscripciones": []}
 
@@ -26,18 +30,34 @@ def estado_inicial() -> dict:
 def cargar(ruta: str) -> dict:
     if not os.path.exists(ruta):
         return estado_inicial()
-    with open(ruta, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
+    try:
+        with open(ruta, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError, ValueError):
+        # Archivo corrupto (p. ej. escritura interrumpida): no morir, reiniciar estado.
+        return estado_inicial()
+    if not isinstance(data, dict):
+        return estado_inicial()
     data.setdefault("cursor", 0)
     data.setdefault("suscripciones", [])
     return data
 
 
 def guardar(ruta: str, estado: dict) -> None:
+    """Escritura ATÓMICA: escribe a un temporal y renombra, para sobrevivir a
+    crashes/OOM (Fly puede matar el proceso) sin corromper el archivo."""
     carpeta = os.path.dirname(os.path.abspath(ruta))
     os.makedirs(carpeta, exist_ok=True)
-    with open(ruta, "w", encoding="utf-8") as fh:
+    tmp = ruta + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(estado, fh, ensure_ascii=False, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, ruta)  # rename atómico
+
+
+def cuenta_usuario(estado: dict, chat_id) -> int:
+    return sum(1 for s in estado["suscripciones"] if s["chat_id"] == chat_id)
 
 
 def suscribir(estado: dict, chat_id, nombre: str, cedula: str | None = None) -> dict:
@@ -53,6 +73,8 @@ def suscribir(estado: dict, chat_id, nombre: str, cedula: str | None = None) -> 
     for s in estado["suscripciones"]:
         if s["chat_id"] == chat_id and s["tokens"] == sub["tokens"]:
             return estado  # ya suscrito
+    if cuenta_usuario(estado, chat_id) >= MAX_ALERTAS_POR_USUARIO:
+        return estado  # tope alcanzado; no se añade
     estado["suscripciones"].append(sub)
     return estado
 

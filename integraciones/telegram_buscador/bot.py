@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 from . import alertas, cliente, formato
 
@@ -36,8 +38,9 @@ INTERVALO_FEED = 60  # segundos entre revisiones del feed para alertas
 AYUDA = (
     "🇻🇪 *Red Rescate Venezuela* — búsqueda de personas tras los terremotos.\n\n"
     "🆘 *EMERGENCIA — persona con vida atrapada:*\n"
-    "• `/urgente [dónde] [cuántas personas] [contacto]` + comparte tu *ubicación* 📎\n"
-    "  → envía una alerta inmediata a los equipos de rescate.\n\n"
+    "• `/urgente [dirección] · [cuántas personas] · [teléfono]`\n"
+    "  luego 📎 comparte tu *ubicación GPS* y 📷 envía *fotos del lugar*.\n"
+    "  → alerta inmediata a los rescatistas (con fecha y hora).\n\n"
     "🔎 *Buscar y avisos:*\n"
     "• `/buscar Nombre Apellido` — busca en todas las fuentes\n"
     "• `/alerta Nombre Apellido` — te aviso si aparece (viva, herida, en necesidad o fallecida)\n"
@@ -55,29 +58,89 @@ def _api(token: str, method: str, params: dict, timeout: int = 35) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def enviar(token: str, chat_id, texto: str) -> None:
+def _leer_cuerpo(e) -> str:
     try:
-        _api(token, "sendMessage", {
-            "chat_id": chat_id,
-            "text": texto,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": "true",
-        })
-    except urllib.error.HTTPError as e:
-        # Solo si el Markdown rompe el parseo (400) reintentamos en texto plano.
-        # En timeouts/errores de red NO reintentamos: el mensaje pudo haberse
-        # enviado igual y reenviar causaría duplicados.
-        if e.code == 400:
-            try:
-                _api(token, "sendMessage", {
-                    "chat_id": chat_id,
-                    "text": texto,
-                    "disable_web_page_preview": "true",
-                })
-            except Exception:
-                pass
+        return e.read().decode("utf-8", "replace")
     except Exception:
-        pass  # timeout/red: no reintentar (evita duplicados)
+        return ""
+
+
+def enviar(token: str, chat_id, texto: str) -> bool:
+    """Envía un mensaje. Devuelve True si se entregó; loggea TODOS los fallos
+    (antes se tragaban en silencio y podíamos perder alertas sin enterarnos)."""
+    def _send(markdown: bool):
+        params = {"chat_id": chat_id, "text": texto, "disable_web_page_preview": "true"}
+        if markdown:
+            params["parse_mode"] = "Markdown"
+        _api(token, "sendMessage", params)
+
+    try:
+        _send(True)
+        return True
+    except urllib.error.HTTPError as e:
+        cuerpo = _leer_cuerpo(e)
+        # Solo reintenta en texto plano si el fallo es de PARSEO de Markdown.
+        if e.code == 400 and "parse" in cuerpo.lower():
+            try:
+                _send(False)
+                return True
+            except Exception as e2:
+                print("[bot] envío falló (plano) chat=%s: %r" % (chat_id, e2), flush=True)
+                return False
+        print("[bot] envío falló chat=%s HTTP %s %s" % (chat_id, e.code, cuerpo[:120]), flush=True)
+        return False
+    except Exception as e:
+        print("[bot] envío falló chat=%s: %r" % (chat_id, e), flush=True)
+        return False
+
+
+def enviar_foto(token: str, chat_id, file_id: str, caption: str = "") -> bool:
+    """Reenvía una foto (por file_id) a un chat/canal. Devuelve True si se entregó."""
+    try:
+        _api(token, "sendPhoto", {"chat_id": chat_id, "photo": file_id, "caption": caption[:1000]})
+        return True
+    except Exception as e:
+        print("[bot] envío de foto falló chat=%s: %r" % (chat_id, e), flush=True)
+        return False
+
+
+# --- Utilidades para el reporte de urgencia (anti-abuso / anti-inyección) ---
+_URGENTE_HIST: dict = {}
+_URGENTE_SESION: dict = {}  # chat_id -> timestamp: ventana para adjuntar foto/ubicación tras /urgente
+_MD_CHARS = re.compile(r"[*_`\[\]()~>#+=|{}]")
+
+
+def _ahora_ve() -> str:
+    """Fecha y hora en horario de Venezuela (UTC-4)."""
+    return (datetime.now(timezone.utc) - timedelta(hours=4)).strftime("%Y-%m-%d %H:%M")
+
+
+def _foto_id(msg: dict):
+    """file_id de la foto de mayor resolución del mensaje, si hay."""
+    fotos = msg.get("photo") or []
+    return fotos[-1]["file_id"] if fotos else None
+
+
+def _rate_urgente_ok(chat_id, ahora: float, ventana: float = 600, tope: int = 3) -> bool:
+    h = [t for t in _URGENTE_HIST.get(chat_id, []) if ahora - t < ventana]
+    if len(h) >= tope:
+        _URGENTE_HIST[chat_id] = h
+        return False
+    h.append(ahora)
+    _URGENTE_HIST[chat_id] = h
+    return True
+
+
+def _sanit(s, limite: int) -> str:
+    return _MD_CHARS.sub(" ", str(s or "")).strip()[:limite]
+
+
+def _coord_valida(v, rango: float):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if -rango <= f <= rango else None
 
 
 def _arg(texto: str, comando: str) -> str:
@@ -90,6 +153,16 @@ def manejar_update(token, base, estado, ruta_estado, update) -> None:
         return
     chat_id = msg["chat"]["id"]
     texto = (msg.get("text") or "").strip()
+    caption = (msg.get("caption") or "").strip()
+
+    # /urgente puede venir como texto, o como pie de foto (foto + descripción juntas).
+    if texto.startswith("/urgente") or caption.startswith("/urgente"):
+        _reportar_urgencia(token, chat_id, msg)
+        return
+    # Foto o ubicación tras un /urgente reciente: se adjuntan a ese reporte.
+    if (msg.get("photo") or msg.get("location")) and _sesion_urgente_activa(chat_id):
+        _adjuntar_urgencia(token, chat_id, msg)
+        return
 
     if texto.startswith(("/start", "/ayuda", "/help")):
         enviar(token, chat_id, AYUDA)
@@ -133,83 +206,136 @@ def manejar_update(token, base, estado, ruta_estado, update) -> None:
         alertas.quitar(estado, chat_id, q)
         alertas.guardar(ruta_estado, estado)
         enviar(token, chat_id, "Quité la alerta de “%s”." % q)
-    elif texto.startswith("/urgente") or (msg.get("location") and not texto):
-        _reportar_urgencia(token, chat_id, msg)
     else:
         enviar(token, chat_id, AYUDA)
 
 
+def _sesion_urgente_activa(chat_id, ventana: float = 900) -> bool:
+    """True si el usuario hizo /urgente en los últimos ~15 min (para adjuntar foto/ubicación)."""
+    ts = _URGENTE_SESION.get(chat_id)
+    return ts is not None and (time.time() - ts) < ventana
+
+
 def _reportar_urgencia(token, chat_id, msg) -> None:
-    """🆘 Reporte de persona con vida atrapada -> alerta inmediata al canal de rescate."""
+    """🆘 Reporte de persona con vida atrapada -> alerta inmediata al canal de rescate.
+
+    Captura lo que piden los rescatistas: ubicación (GPS o escrita), foto del lugar,
+    contacto, y fecha/hora (automática). Foto/ubicación extra se adjuntan después
+    (ventana de sesión). Texto sanitizado + plano (anti-inyección).
+    """
     canal = os.environ.get("RESCATE_CANAL", "")
-    desc = _arg(msg.get("text") or "", "/urgente")
-    loc = msg.get("location")
+    fuente_texto = (msg.get("text") or "") or (msg.get("caption") or "")
+    desc = _sanit(_arg(fuente_texto, "/urgente"), 500)
+    loc = msg.get("location") or {}
+    la = _coord_valida(loc.get("latitude"), 90)
+    lo = _coord_valida(loc.get("longitude"), 180)
+    foto = _foto_id(msg)
+
     if not canal:
         enviar(token, chat_id, "El canal de rescate aún no está configurado. Avisa al equipo.")
         return
-    if not desc and not loc:
+    if not desc and la is None and not foto:
         enviar(token, chat_id,
                "🆘 *Reportar persona con vida atrapada*\n\n"
-               "Escribe: `/urgente [dónde está] [cuántas personas] [contacto]`\n"
-               "y, si puedes, comparte tu *ubicación* 📎 (clip → Ubicación) para el punto exacto.")
+               "Envía en un mensaje:\n"
+               "`/urgente [dirección exacta] · [cuántas personas] · [teléfono de contacto]`\n\n"
+               "Y luego, para el rescate:\n"
+               "• 📎 comparte la *ubicación GPS* (clip → Ubicación)\n"
+               "• 📷 envía *fotos del lugar*\n"
+               "_(La fecha y hora se añaden solas.)_")
         return
-    partes = ["🆘 *URGENTE — Posible persona con vida atrapada*"]
+    if not _rate_urgente_ok(chat_id, time.time()):
+        enviar(token, chat_id,
+               "Ya enviaste varios reportes; los equipos de rescate los están viendo. "
+               "Si es una emergencia distinta, espera unos minutos.")
+        return
+
+    quien = _sanit((msg.get("from") or {}).get("first_name"), 40) or "anónimo"
+    partes = [
+        "🆘 URGENTE — Posible persona con vida atrapada",
+        "🕐 %s (hora Venezuela)" % _ahora_ve(),
+    ]
     if desc:
         partes.append(desc)
-    if loc:
-        la, lo = loc.get("latitude"), loc.get("longitude")
-        partes.append("📍 Ubicación: https://www.google.com/maps/search/?api=1&query=%s,%s" % (la, lo))
-    quien = (msg.get("from") or {}).get("first_name") or "anónimo"
-    partes.append("Reportado por *%s* vía @red_ayuda_bot. ⚠️ Verifiquen y actúen de inmediato." % quien)
+    if la is not None and lo is not None:
+        partes.append("📍 GPS: https://www.google.com/maps/search/?api=1&query=%.6f,%.6f" % (la, lo))
+    partes.append("Reportado por %s vía @red_ayuda_bot. Verifiquen y actúen de inmediato." % quien)
     mensaje = "\n\n".join(partes)
 
-    def _post_canal(markdown: bool):
-        params = {"chat_id": canal, "text": mensaje, "disable_web_page_preview": "true"}
-        if markdown:
-            params["parse_mode"] = "Markdown"
-        _api(token, "sendMessage", params)
-
-    # Publicar en el canal. Si el texto del usuario rompe el Markdown (400),
-    # reintenta en TEXTO PLANO: en una emergencia la alerta SIEMPRE debe llegar.
     try:
-        try:
-            _post_canal(True)
-        except urllib.error.HTTPError as e:
-            if e.code == 400:
-                _post_canal(False)
-            else:
-                raise
+        if foto:
+            _api(token, "sendPhoto", {"chat_id": canal, "photo": foto, "caption": mensaje[:1000]})
+        else:
+            _api(token, "sendMessage", {
+                "chat_id": canal, "text": mensaje, "disable_web_page_preview": "true"})
+        _URGENTE_SESION[chat_id] = time.time()  # abre ventana para adjuntar foto/ubicación
         enviar(token, chat_id,
-               "✅ Tu reporte urgente fue enviado a los equipos de rescate. Gracias.\n"
-               "Si aún no lo hiciste, comparte tu *ubicación* 📎 para localizar el punto exacto.")
+               "✅ Tu reporte urgente fue enviado a los equipos de rescate.\n"
+               "Para ayudarlos, ahora puedes 📎 compartir tu *ubicación GPS* y 📷 enviar *fotos del lugar*.")
     except urllib.error.HTTPError as e:
-        try:
-            detalle = e.read().decode("utf-8", "replace")
-        except Exception:
-            detalle = str(e)
-        print("[urgente] fallo publicar en canal '%s': HTTP %s %s" % (canal, e.code, detalle))
+        print("[urgente] fallo publicar en canal '%s': HTTP %s %s"
+              % (canal, e.code, _leer_cuerpo(e)[:150]), flush=True)
         enviar(token, chat_id,
                "⚠️ No pude enviar el reporte al canal de rescate ahora. "
                "Por favor llama también a emergencias.")
     except Exception as e:
-        print("[urgente] fallo publicar en canal '%s': %r" % (canal, e))
+        print("[urgente] fallo publicar en canal '%s': %r" % (canal, e), flush=True)
         enviar(token, chat_id,
                "⚠️ No pude enviar el reporte al canal de rescate ahora. "
                "Por favor llama también a emergencias.")
 
 
-def revisar_alertas(token, base, estado, ruta_estado) -> dict:
-    try:
-        payload = cliente.feed(base, estado.get("cursor", 0))
-    except Exception:
-        return estado
-    avisos, estado = alertas.revisar(estado, payload)
-    for chat_id, rec in avisos:
+def _adjuntar_urgencia(token, chat_id, msg) -> None:
+    """Adjunta una foto o ubicación al reporte /urgente reciente (la relaya al canal)."""
+    canal = os.environ.get("RESCATE_CANAL", "")
+    if not canal:
+        return
+    quien = _sanit((msg.get("from") or {}).get("first_name"), 40) or "anónimo"
+    foto = _foto_id(msg)
+    loc = msg.get("location") or {}
+    la = _coord_valida(loc.get("latitude"), 90)
+    lo = _coord_valida(loc.get("longitude"), 180)
+    ok = False
+    if foto:
+        ok = enviar_foto(token, canal, foto,
+                         "📷 Foto del reporte urgente de %s — %s (hora VE)" % (quien, _ahora_ve()))
+    elif la is not None and lo is not None:
+        txt = ("📍 GPS del reporte urgente de %s — %s (hora VE)\n"
+               "https://www.google.com/maps/search/?api=1&query=%.6f,%.6f" % (quien, _ahora_ve(), la, lo))
         try:
-            enviar(token, chat_id, formato.formato_alerta(rec))
-        except Exception:
-            pass  # un envío fallido no debe frenar el resto
-    alertas.guardar(ruta_estado, estado)
+            _api(token, "sendMessage", {"chat_id": canal, "text": txt, "disable_web_page_preview": "true"})
+            ok = True
+        except Exception as e:
+            print("[urgente] fallo adjuntar ubicación: %r" % e, flush=True)
+    if ok:
+        _URGENTE_SESION[chat_id] = time.time()  # refresca la ventana
+        enviar(token, chat_id, "✅ Añadido a tu reporte de rescate. Gracias.")
+    else:
+        enviar(token, chat_id, "⚠️ No pude adjuntarlo al canal ahora. Intenta de nuevo.")
+
+
+def revisar_alertas(token, base, estado, ruta_estado) -> dict:
+    # DRENA el feed hasta agotarlo: si entran >200 registros en un intervalo, un
+    # solo lote los perdería (has_more). Tope de páginas por seguridad.
+    for _ in range(50):
+        try:
+            payload = cliente.feed(base, estado.get("cursor", 0))
+        except Exception as e:
+            print("[alertas] feed falló: %r" % e, flush=True)
+            return estado
+        avisos, estado = alertas.revisar(estado, payload)
+        for chat_id, rec in avisos:
+            try:
+                entregado = enviar(token, chat_id, formato.formato_alerta(rec))
+            except Exception as e:  # formato_alerta u otro fallo inesperado
+                entregado = False
+                print("[alertas] error preparando aviso chat=%s: %r" % (chat_id, e), flush=True)
+            if not entregado:
+                print("[alertas] aviso NO entregado chat=%s record=%s"
+                      % (chat_id, rec.get("id")), flush=True)
+        alertas.guardar(ruta_estado, estado)
+        if not payload.get("has_more"):
+            return estado
     return estado
 
 
