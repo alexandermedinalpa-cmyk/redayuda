@@ -162,12 +162,23 @@ def _reportar_urgencia(token, chat_id, msg) -> None:
     quien = (msg.get("from") or {}).get("first_name") or "anónimo"
     partes.append("Reportado por *%s* vía @red_ayuda_bot. ⚠️ Verifiquen y actúen de inmediato." % quien)
     mensaje = "\n\n".join(partes)
-    # Publicar en el canal (detectando si falla, p. ej. usuario de canal incorrecto).
+
+    def _post_canal(markdown: bool):
+        params = {"chat_id": canal, "text": mensaje, "disable_web_page_preview": "true"}
+        if markdown:
+            params["parse_mode"] = "Markdown"
+        _api(token, "sendMessage", params)
+
+    # Publicar en el canal. Si el texto del usuario rompe el Markdown (400),
+    # reintenta en TEXTO PLANO: en una emergencia la alerta SIEMPRE debe llegar.
     try:
-        _api(token, "sendMessage", {
-            "chat_id": canal, "text": mensaje,
-            "parse_mode": "Markdown", "disable_web_page_preview": "true",
-        })
+        try:
+            _post_canal(True)
+        except urllib.error.HTTPError as e:
+            if e.code == 400:
+                _post_canal(False)
+            else:
+                raise
         enviar(token, chat_id,
                "✅ Tu reporte urgente fue enviado a los equipos de rescate. Gracias.\n"
                "Si aún no lo hiciste, comparte tu *ubicación* 📎 para localizar el punto exacto.")
