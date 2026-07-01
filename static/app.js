@@ -258,12 +258,22 @@
     }).join("");
   }
 
+  // Rellena las insignias de conteo del bloque "Ayuda e insumos" (home)
+  function fillAyudaCounts(recordTypes) {
+    const rt = recordTypes || {};
+    document.querySelectorAll("[data-cnt]").forEach((el) => {
+      const n = Number(rt[el.dataset.cnt]) || 0;
+      el.textContent = compactNumber(n);
+    });
+  }
+
   function applyStats(s) {
     statRecords.textContent = compactNumber(s.total_records);
     statSources.textContent = compactNumber(s.total_sources);
     const last = (s.sources || []).map((x) => x.last_sync).filter(Boolean).sort().pop();
     statFresh.textContent = last ? relativeTime(last) : "nunca";
     renderTypeBars(s.record_types);
+    fillAyudaCounts(s.record_types);
     sourceInput.innerHTML = '<option value="">Todas las fuentes</option>' +
       (s.sources || []).filter((x) => x.record_count > 0).sort((a, b) => b.record_count - a.record_count)
         .map((x) => `<option value="${escapeHtml(x.id)}">${escapeHtml(x.name)} (${compactNumber(x.record_count)})</option>`).join("");
